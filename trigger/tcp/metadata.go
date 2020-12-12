@@ -15,11 +15,11 @@ type HandlerSettings struct {
 }
 
 type Output struct {
-	Data string `md:"data"` // The data received from the connection
+	Data []byte `md:"data"` // The data received from the connection
 }
 
 type Reply struct {
-	Reply string `md:"reply"` // The reply to be sent back
+	Reply []byte `md:"reply"` // The reply to be sent back
 }
 
 func (o *Output) ToMap() map[string]interface{} {
@@ -31,7 +31,7 @@ func (o *Output) ToMap() map[string]interface{} {
 func (o *Output) FromMap(values map[string]interface{}) error {
 
 	var err error
-	o.Data, err = coerce.ToString(values["data"])
+	o.Data, err = coerce.ToBytes(values["data"])
 	if err != nil {
 		return err
 	}
@@ -48,7 +48,7 @@ func (r *Reply) ToMap() map[string]interface{} {
 func (r *Reply) FromMap(values map[string]interface{}) error {
 
 	var err error
-	r.Reply, err = coerce.ToString(values["reply"])
+	r.Reply, err = coerce.ToBytes(values["reply"])
 	if err != nil {
 		return err
 	}

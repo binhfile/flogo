@@ -36,14 +36,14 @@
   "output": [
     {
       "name": "data",
-      "type": "string",
-      "description": "Incoming data"
+      "type": "bytes",
+      "description": "Request data"
     }
   ],
   "reply": [
     {
       "name": "reply",
-      "type": "string",
+      "type": "bytes",
       "description": "Reply data"
     }
   ],

@@ -1,19 +1,14 @@
 package tcp
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
-	"io"
-	"net"
-	"strings"
-	"time"
-	"unicode/utf8"
-
 	"github.com/project-flogo/core/data/metadata"
 	"github.com/project-flogo/core/support/log"
 	"github.com/project-flogo/core/trigger"
+	"net"
+	"strings"
+	"time"
 )
 
 var triggerMd = trigger.NewMetadata(&Settings{}, &HandlerSettings{}, &Output{}, &Reply{})
@@ -22,7 +17,7 @@ func init() {
 	_ = trigger.Register(&Trigger{}, &Factory{})
 }
 
-// Factory is a kafka trigger factory
+// Factory is a trigger factory
 type Factory struct {
 }
 
@@ -48,7 +43,6 @@ type Trigger struct {
 	handlers    []trigger.Handler
 	listener    net.Listener
 	logger      log.Logger
-	delimiter   byte
 	connections []net.Conn
 }
 
@@ -59,13 +53,6 @@ func (t *Trigger) Initialize(ctx trigger.InitContext) error {
 	port := t.settings.Port
 	t.handlers = ctx.GetHandlers()
 	t.logger = ctx.Logger()
-
-	delimiter := "\n"
-
-	if delimiter != "" {
-		r, _ := utf8.DecodeRuneInString(delimiter)
-		t.delimiter = byte(r)
-	}
 
 	if port == "" {
 		return errors.New("Valid port must be set")
@@ -81,11 +68,12 @@ func (t *Trigger) Initialize(ctx trigger.InitContext) error {
 	return err
 }
 
-// Start starts the kafka trigger
+// Start starts the trigger
 func (t *Trigger) Start() error {
 
 	go t.waitForConnection()
-	t.logger.Infof("Started listener on Port - %s, Network - %s", t.settings.Port, t.settings.Network)
+	t.logger.Infof("Started listener on - %s:%s, Network - %s",
+		t.settings.Host, t.settings.Port, t.settings.Network)
 	return nil
 }
 
@@ -108,81 +96,37 @@ func (t *Trigger) waitForConnection() {
 }
 
 func (t *Trigger) handleNewConnection(conn net.Conn) {
+	connDesc := conn.RemoteAddr().String()
+	defer func() {
+		t.logger.Debugf("Disconnect from client - %s", connDesc)
+	}()
 
 	//Gather connection list for later cleanup
 	t.connections = append(t.connections, conn)
 
 	for {
-
 		if t.settings.TimeOut > 0 {
 			t.logger.Info("Setting timeout: ", t.settings.TimeOut)
 			conn.SetDeadline(time.Now().Add(time.Duration(t.settings.TimeOut) * time.Millisecond))
 		}
 
-		output := &Output{}
-
-		if t.delimiter != 0 {
-			data, err := bufio.NewReader(conn).ReadBytes(t.delimiter)
-			if err != nil {
-				errString := err.Error()
-				if !strings.Contains(errString, "use of closed network connection") {
-					t.logger.Error("Error reading data from connection: ", err.Error())
-				} else {
-					t.logger.Info("Connection is closed.")
-				}
-				if nerr, ok := err.(net.Error); !ok || !nerr.Timeout() {
-					// Return if not timeout error
-					return
-				}
-
+		buf := make([]byte, 4096)
+		rlen, err := conn.Read(buf[:])
+		if err != nil {
+			if nerr, ok := err.(*net.OpError); ok && nerr.Timeout() {
+				// timeout
 			} else {
-				output.Data = string(data[:len(data)-1])
+				t.logger.Error("Read with error %s", err.Error())
+				return
 			}
-		} else {
-			var buf bytes.Buffer
-			_, err := io.Copy(&buf, conn)
-			if err != nil {
-				errString := err.Error()
-				if !strings.Contains(errString, "use of closed network connection") {
-					t.logger.Error("Error reading data from connection: ", err.Error())
-				} else {
-					t.logger.Info("Connection is closed.")
-				}
-				if nerr, ok := err.(net.Error); !ok || !nerr.Timeout() {
-					// Return if not timeout error
-					return
-				}
-			} else {
-				output.Data = string(buf.Bytes())
-			}
-		}
-
-		if output.Data != "" {
-			var replyData []string
+		} else if rlen > 0 {
+			output := &Output{}
+			output.Data = buf[:rlen]
 			for i := 0; i < len(t.handlers); i++ {
-				results, err := t.handlers[i].Handle(context.Background(), output)
+				_, err := t.handlers[i].Handle(context.Background(), output)
 				if err != nil {
 					t.logger.Error("Error invoking action : ", err.Error())
 					continue
-				}
-
-				reply := &Reply{}
-				err = reply.FromMap(results)
-				if err != nil {
-					t.logger.Error("Failed to convert flow output : ", err.Error())
-					continue
-				}
-				if reply.Reply != "" {
-					replyData = append(replyData, reply.Reply)
-				}
-			}
-
-			if len(replyData) > 0 {
-				replyToSend := strings.Join(replyData, string(t.delimiter))
-				// Send a response back to client contacting us.
-				_, err := conn.Write([]byte(replyToSend + "\n"))
-				if err != nil {
-					t.logger.Error("Failed to write to connection : ", err.Error())
 				}
 			}
 		}
