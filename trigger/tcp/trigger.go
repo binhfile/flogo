@@ -8,6 +8,7 @@ import (
 	"github.com/project-flogo/core/trigger"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -44,6 +45,7 @@ type Trigger struct {
 	listener    net.Listener
 	logger      log.Logger
 	connections []net.Conn
+	lock        sync.Mutex
 }
 
 // Initialize initializes the trigger
@@ -98,15 +100,25 @@ func (t *Trigger) waitForConnection() {
 func (t *Trigger) handleNewConnection(conn net.Conn) {
 	connDesc := conn.RemoteAddr().String()
 	defer func() {
-		t.logger.Debugf("Disconnect from client - %s", connDesc)
+		for idx, item := range t.connections {
+			if item == conn {
+				t.connections = append(t.connections[:idx], t.connections[idx+1:]...)
+				break
+			}
+		}
+		_ = conn.Close()
+		t.logger.Debugf("[%s] disconnect from client", connDesc)
 	}()
 
-	//Gather connection list for later cleanup
-	t.connections = append(t.connections, conn)
+	{
+		t.lock.Lock()
+		//Gather connection list for later cleanup
+		t.connections = append(t.connections, conn)
+		t.lock.Unlock()
+	}
 
 	for {
 		if t.settings.TimeOut > 0 {
-			t.logger.Info("Setting timeout: ", t.settings.TimeOut)
 			conn.SetDeadline(time.Now().Add(time.Duration(t.settings.TimeOut) * time.Millisecond))
 		}
 
@@ -116,7 +128,7 @@ func (t *Trigger) handleNewConnection(conn net.Conn) {
 			if nerr, ok := err.(*net.OpError); ok && nerr.Timeout() {
 				// timeout
 			} else {
-				t.logger.Warnf("Read with error %s", err.Error())
+				t.logger.Warnf("[%s] Read with error %s", connDesc, err.Error())
 				return
 			}
 		} else if rlen > 0 {
@@ -125,7 +137,7 @@ func (t *Trigger) handleNewConnection(conn net.Conn) {
 			for i := 0; i < len(t.handlers); i++ {
 				_, err := t.handlers[i].Handle(context.Background(), output)
 				if err != nil {
-					t.logger.Error("Error invoking action : ", err.Error())
+					t.logger.Warnf("[%s] Error invoking action : ", connDesc, err.Error())
 					continue
 				}
 			}
