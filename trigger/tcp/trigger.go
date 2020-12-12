@@ -116,7 +116,7 @@ func (t *Trigger) handleNewConnection(conn net.Conn) {
 			if nerr, ok := err.(*net.OpError); ok && nerr.Timeout() {
 				// timeout
 			} else {
-				t.logger.Error("Read with error %s", err.Error())
+				t.logger.Warnf("Read with error %s", err.Error())
 				return
 			}
 		} else if rlen > 0 {
