@@ -158,10 +158,10 @@ func (t *Trigger) handleNewConnection(conn net.Conn) {
 		GetPayloadSize: func(header []byte) int {
 			// Big endian format
 			var dataLength uint32
-			dataLength = 0
-			for _, v := range header {
-				dataLength = (dataLength << 8) | (uint32(v) & 0x000000FF)
-			}
+			dataLength = (uint32(header[0]) & 0x000000FF) |
+				((uint32(header[1]) & 0x000000FF) << 8) |
+				((uint32(header[2]) & 0x000000FF) << 16) |
+				((uint32(header[3]) & 0x000000FF) << 24)
 			return int(dataLength)
 		},
 	}
