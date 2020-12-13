@@ -9,6 +9,10 @@ type Settings struct {
 	Host    string `md:"host"`          // The host name or IP for TCP server.
 	Port    string `md:"port,required"` // The port to listen on
 	TimeOut int    `md:"timeout"`
+
+	SSLCertificateFile string `md:"ssl_certificate_file"`
+	SSLPrivateKeyFile  string `md:"ssl_private_key_file"`
+	SSLVersion         string `md:"ssl_version"`
 }
 
 type HandlerSettings struct {

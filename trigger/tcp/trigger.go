@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"github.com/project-flogo/core/data/metadata"
 	"github.com/project-flogo/core/support/log"
@@ -65,12 +66,46 @@ func (t *Trigger) Initialize(ctx trigger.InitContext) error {
 		return errors.New("Valid port must be set")
 	}
 
-	listener, err := net.Listen(t.settings.Network, host+":"+port)
+	network := t.settings.Network
+	if network == "ssl" {
+		network = "tcp"
+	}
+
+	listener, err := net.Listen(network, host+":"+port)
 	if err != nil {
 		return err
 	}
 
-	t.listener = listener
+	if t.settings.Network == "ssl" {
+		cert, err := tls.LoadX509KeyPair(t.settings.SSLCertificateFile, t.settings.SSLPrivateKeyFile)
+		if err != nil {
+			return err
+		}
+		sslMinVer := tls.VersionTLS12
+		if t.settings.SSLVersion == "1.0" {
+			sslMinVer = tls.VersionTLS10
+		} else if t.settings.SSLVersion == "1.1" {
+			sslMinVer = tls.VersionTLS11
+		} else if t.settings.SSLVersion == "1.2" {
+			sslMinVer = tls.VersionTLS12
+		} else if t.settings.SSLVersion == "1.3" {
+			sslMinVer = tls.VersionTLS13
+		}
+		sslConfig := &tls.Config{
+			MinVersion: uint16(sslMinVer),
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+			},
+			Certificates:             []tls.Certificate{cert},
+			PreferServerCipherSuites: true,
+		}
+		sockSSL := tls.NewListener(listener, sslConfig)
+		t.listener = sockSSL
+	} else {
+		t.listener = listener
+	}
 
 	return err
 }
