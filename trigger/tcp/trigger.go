@@ -38,14 +38,19 @@ func (*Factory) New(config *trigger.Config) (trigger.Trigger, error) {
 	return &Trigger{settings: s}, nil
 }
 
-// Trigger is a kafka trigger
+// Trigger is a trigger
 type Trigger struct {
 	settings    *Settings
 	handlers    []trigger.Handler
 	listener    net.Listener
 	logger      log.Logger
-	connections []net.Conn
+	connections []*connection
 	lock        sync.Mutex
+}
+
+type connection struct {
+	Conn net.Conn
+	Frm  *Frame
 }
 
 // Initialize initializes the trigger
@@ -100,20 +105,40 @@ func (t *Trigger) waitForConnection() {
 func (t *Trigger) handleNewConnection(conn net.Conn) {
 	connDesc := conn.RemoteAddr().String()
 	defer func() {
+		t.lock.Lock()
 		for idx, item := range t.connections {
-			if item == conn {
+			if item.Conn == conn {
 				t.connections = append(t.connections[:idx], t.connections[idx+1:]...)
 				break
 			}
 		}
+		t.lock.Unlock()
 		_ = conn.Close()
 		t.logger.Debugf("[%s] disconnect from client", connDesc)
 	}()
 
+	frm := &Frame{
+		FrameMaxSize: 1024 * 1024 * 10,
+		HeaderSize:   4,
+		GetPayloadSize: func(header []byte) int {
+			// Big endian format
+			var dataLength uint32
+			dataLength = 0
+			for _, v := range header {
+				dataLength = (dataLength << 8) | (uint32(v) & 0x000000FF)
+			}
+			return int(dataLength)
+		},
+	}
+
 	{
+		con := &connection{
+			Conn: conn,
+			Frm:  frm,
+		}
+		_ = con.Frm.Initialize()
 		t.lock.Lock()
-		//Gather connection list for later cleanup
-		t.connections = append(t.connections, conn)
+		t.connections = append(t.connections, con)
 		t.lock.Unlock()
 	}
 
@@ -132,14 +157,20 @@ func (t *Trigger) handleNewConnection(conn net.Conn) {
 				return
 			}
 		} else if rlen > 0 {
-			output := &Output{}
-			output.Data = buf[:rlen]
-			for i := 0; i < len(t.handlers); i++ {
-				_, err := t.handlers[i].Handle(context.Background(), output)
-				if err != nil {
-					t.logger.Warnf("[%s] Error invoking action : ", connDesc, err.Error())
-					continue
+			err = frm.ByteToFrame(buf[:rlen], func(header []byte, payload []byte) {
+				output := &Output{}
+				output.Data = payload
+				for i := 0; i < len(t.handlers); i++ {
+					_, err := t.handlers[i].Handle(context.Background(), output)
+					if err != nil {
+						t.logger.Warnf("[%s] Error invoking action : ", connDesc, err.Error())
+						continue
+					}
 				}
+			})
+			if err != nil {
+				t.logger.Warnf("[%s] framing with error %s", connDesc, err.Error())
+				return
 			}
 		}
 	}
@@ -149,7 +180,8 @@ func (t *Trigger) handleNewConnection(conn net.Conn) {
 func (t *Trigger) Stop() error {
 
 	for i := 0; i < len(t.connections); i++ {
-		t.connections[i].Close()
+		t.connections[i].Conn.Close()
+		t.connections[i].Frm.Destroy()
 	}
 
 	t.connections = nil
